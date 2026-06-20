@@ -1,0 +1,42 @@
+name: CCTV Stream Refresh
+
+on:
+  schedule:
+    - cron: '0 */2 * * *'      # প্রতি ২ ঘণ্টা
+  workflow_dispatch:            # ম্যানুয়াল রানের জন্য
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Run CCTV scraper (auto-installs dependencies)
+      run: python cctv.py
+      env:
+        PYTHONUNBUFFERED: 1
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: cctv-stream
+        path: output/
+        retention-days: 1
+    
+    - name: Commit and push changes
+      run: |
+        git config user.name "GitHub Action"
+        git config user.email "action@github.com"
+        git add config.json output/
+        git diff --staged --quiet || git commit -m "🔄 Update CCTV streams [skip ci]"
+        git push
