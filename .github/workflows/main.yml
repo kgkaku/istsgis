@@ -2,8 +2,8 @@ name: CCTV Stream Refresh
 
 on:
   schedule:
-    - cron: '0 */2 * * *'
-  workflow_dispatch:
+    - cron: '0 */2 * * *'      # প্রতি ২ ঘণ্টা
+  workflow_dispatch:            # ম্যানুয়াল রানের জন্য
 
 jobs:
   refresh:
@@ -23,8 +23,11 @@ jobs:
     
     - name: Install dependencies
       run: |
+        sudo apt-get update
+        sudo apt-get install -y libgbm-dev wget
+        pip install --upgrade pip
         pip install requests pycryptodome playwright
-        playwright install chromium
+        playwright install --with-deps chromium
     
     - name: Run CCTV scraper
       run: python cctv.py
