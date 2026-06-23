@@ -12,9 +12,6 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        persist-credentials: false
-        fetch-depth: 0
     
     - name: Setup Python
       uses: actions/setup-python@v5
@@ -45,4 +42,4 @@ jobs:
         git config user.email "action@github.com"
         git add config.json output/
         git diff --staged --quiet || git commit -m "🔄 Update CCTV streams [skip ci]"
-        git push
+        git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:main
