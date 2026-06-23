@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-CCTV Live Stream Extractor - Final Version
+CCTV Live Stream Extractor - Final Version with Proxy Support
 - ফিঙ্গারপ্রিন্ট: ge.js থেকে অটো জেনারেট
+- Proxy: GitHub থেকে অটো লোড
 - auth-key: HMAC-SHA256
 - লাইসেন্স: vdnx API
 - আউটপুট: cctv.m3u + cctv.json
@@ -72,13 +73,100 @@ CHANNEL_NAMES = {
 }
 
 # ============================================================
+# PROXY FUNCTIONS
+# ============================================================
+
+PROXY_CACHE = None
+
+def get_proxy_list():
+    """
+    GitHub থেকে Proxy লিস্ট নেওয়া
+    """
+    global PROXY_CACHE
+    
+    if PROXY_CACHE:
+        return PROXY_CACHE
+    
+    urls = [
+        "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
+        "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt",
+    ]
+    
+    all_proxies = []
+    for url in urls:
+        try:
+            response = requests.get(url, timeout=10)
+            proxies = response.text.strip().split('\n')
+            proxies = [p.strip() for p in proxies if p.strip()]
+            if proxies:
+                all_proxies.extend(proxies)
+                print(f"✅ Loaded {len(proxies)} proxies from {url.split('/')[-1]}")
+        except Exception as e:
+            print(f"⚠️ Could not load {url}: {e}")
+    
+    # Taiwan Proxy (ঐচ্ছিক)
+    try:
+        tw_url = "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=TW"
+        response = requests.get(tw_url, timeout=10)
+        tw_proxies = response.text.strip().split('\n')
+        tw_proxies = [p.strip() for p in tw_proxies if p.strip()]
+        all_proxies.extend(tw_proxies)
+        print(f"✅ Loaded {len(tw_proxies)} Taiwan proxies")
+    except:
+        pass
+    
+    PROXY_CACHE = all_proxies
+    return all_proxies
+
+def get_working_proxy():
+    """
+    কাজ করা Proxy খুঁজে বের করা
+    """
+    proxies = get_proxy_list()
+    if not proxies:
+        print("⚠️ No proxies available")
+        return None
+    
+    print(f"🔄 Testing {min(len(proxies), 50)} proxies...")
+    
+    # প্রথম ৫০টি Proxy টেস্ট
+    test_proxies = proxies[:50]
+    random.shuffle(test_proxies)
+    
+    for proxy in test_proxies:
+        try:
+            # ge.js দিয়ে Proxy টেস্ট
+            test_url = "https://p.data.cctv.com/ge.js"
+            response = requests.get(
+                test_url,
+                proxies={'http': proxy, 'https': proxy},
+                timeout=5
+            )
+            if response.status_code == 200:
+                print(f"✅ Working proxy found: {proxy}")
+                return proxy
+        except:
+            continue
+    
+    print("❌ No working proxy found!")
+    return None
+
+def get_proxies_dict():
+    """
+    Proxy dict তৈরি করা (requests-এর জন্য)
+    """
+    proxy = get_working_proxy()
+    if proxy:
+        return {'http': proxy, 'https': proxy}
+    return None
+
+# ============================================================
 # FINGERPRINT FUNCTIONS
 # ============================================================
 
-def get_fingerprint_from_gejs():
+def get_fingerprint_from_gejs(proxies=None):
     """
-    পছন্দের পদ্ধতি: ge.js থেকে সরাসরি ফিঙ্গারপ্রিন্ট নেওয়া
-    URL: https://p.data.cctv.com/ge.js
+    ge.js থেকে ফিঙ্গারপ্রিন্ট নেওয়া
     """
     try:
         url = "https://p.data.cctv.com/ge.js"
@@ -88,15 +176,15 @@ def get_fingerprint_from_gejs():
             "Accept": "*/*"
         }
         
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, proxies=proxies, timeout=15)
         
-        # 1. কুকি থেকে cna নেওয়া (সেরা)
+        # কুকি থেকে cna নেওয়া
         cna = response.cookies.get("cna")
         if cna:
             print(f"✅ Fingerprint from cookie: {cna[:20]}...")
             return cna
         
-        # 2. রেসপন্স বডি থেকে Etag নেওয়া (ব্যাকআপ)
+        # রেসপন্স বডি থেকে Etag
         match = re.search(r'goldlog\.Etag="([^"]+)"', response.text)
         if match:
             cna = match.group(1)
@@ -112,14 +200,13 @@ def get_fingerprint_from_gejs():
 
 def load_fingerprint():
     """
-    ফিঙ্গারপ্রিন্ট লোড করা:
-    1. ge.js থেকে নতুন নেওয়া (সর্বদা)
-    2. ব্যর্থ হলে config.json থেকে পড়া
+    ফিঙ্গারপ্রিন্ট লোড করা
     """
-    # 1. ge.js থেকে নতুন নেওয়ার চেষ্টা
-    fingerprint = get_fingerprint_from_gejs()
+    # 1. Proxy ব্যবহার করে ge.js থেকে নেওয়ার চেষ্টা
+    proxies = get_proxies_dict()
+    fingerprint = get_fingerprint_from_gejs(proxies)
+    
     if fingerprint:
-        # config.json-এ সেভ
         with open(CONFIG_FILE, 'w') as f:
             json.dump({
                 'fingerprint': fingerprint,
@@ -127,7 +214,13 @@ def load_fingerprint():
             }, f, indent=2)
         return fingerprint
     
-    # 2. ব্যাকআপ: config.json থেকে পড়া
+    # 2. Proxy ছাড়া ge.js চেষ্টা
+    print("🔄 Trying without proxy...")
+    fingerprint = get_fingerprint_from_gejs(None)
+    if fingerprint:
+        return fingerprint
+    
+    # 3. config.json থেকে পড়া
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r') as f:
@@ -149,7 +242,6 @@ def load_fingerprint():
 def generate_auth_key(channel, fingerprint):
     """
     CCTV auth-key জেনারেট করা (HMAC-SHA256)
-    ফরম্যাট: timestamp-random-HMAC_signature
     """
     timestamp = str(int(time.time() * 1000))[:10]
     raw = timestamp + SECRET_1 + SECRET_1 + fingerprint
@@ -168,17 +260,14 @@ def generate_auth_key(channel, fingerprint):
 def decrypt_license(response_text):
     """
     CCTV লাইসেন্স ডিক্রিপ্ট করা
-    সাপোর্ট: JSON, Base64+JSON, AES-256-CBC
     """
     if not response_text:
         return {"public": "0", "tip_msg": "Empty response"}
     
     try:
-        # 1. সরাসরি JSON চেক
         if response_text.strip().startswith('{'):
             return json.loads(response_text)
         
-        # 2. Base64 ডিকোড + AES ডিক্রিপ্ট
         try:
             encrypted_bytes = base64.b64decode(response_text)
         except:
@@ -187,13 +276,11 @@ def decrypt_license(response_text):
         cipher = AES.new(DECRYPT_KEY, AES.MODE_CBC, DECRYPT_IV)
         decrypted_bytes = cipher.decrypt(encrypted_bytes)
         
-        # PKCS#7 আনপ্যাড
         try:
             decrypted = unpad(decrypted_bytes, AES.block_size)
         except ValueError:
             decrypted = decrypted_bytes
         
-        # JSON পার্স
         try:
             return json.loads(decrypted.decode('utf-8'))
         except UnicodeDecodeError:
@@ -205,7 +292,7 @@ def decrypt_license(response_text):
     except Exception as e:
         return {"public": "0", "tip_msg": f"Decrypt error: {str(e)[:100]}"}
 
-def get_license(channel, fingerprint):
+def get_license(channel, fingerprint, proxies=None):
     """
     vdnx.live.cntv.cn থেকে লাইসেন্স নেওয়া
     """
@@ -226,7 +313,7 @@ def get_license(channel, fingerprint):
     }
     
     try:
-        response = requests.get(url, params=params, headers=headers, timeout=15)
+        response = requests.get(url, params=params, headers=headers, proxies=proxies, timeout=15)
         if response.status_code == 200:
             return decrypt_license(response.text)
         else:
@@ -273,12 +360,10 @@ def extract_stream_url(license_data, channel):
     
     manifest = license_data.get('manifest', {})
     
-    # DRM স্ট্রিম প্রথমে চেষ্টা
     stream_url = manifest.get('hls_cdrm')
     if stream_url:
         return stream_url.replace('${channel}', channel)
     
-    # নন-DRM স্ট্রিম
     stream_url = manifest.get('hls_nd')
     if stream_url:
         return stream_url.replace('${channel}', channel)
@@ -352,7 +437,7 @@ def generate_json(channels_data, fingerprint):
 
 def main():
     print("="*60)
-    print("🚀 CCTV LIVE STREAM EXTRACTOR")
+    print("🚀 CCTV LIVE STREAM EXTRACTOR (with Proxy)")
     print("="*60)
     
     # 1. ফিঙ্গারপ্রিন্ট নেওয়া
@@ -364,7 +449,10 @@ def main():
     # 2. আউটপুট ডিরেক্টরি তৈরি
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
-    # 3. সব চ্যানেল প্রসেস
+    # 3. Proxy নেওয়া
+    proxies = get_proxies_dict()
+    
+    # 4. সব চ্যানেল প্রসেস
     channels_data = {}
     success_count = 0
     
@@ -375,7 +463,7 @@ def main():
         print(f"\n[{i}/{len(CHANNELS)}] {channel} - {CHANNEL_NAMES.get(channel, channel)}")
         
         try:
-            license_data = get_license(channel, fingerprint)
+            license_data = get_license(channel, fingerprint, proxies)
             
             if not license_data:
                 print(f"   ⚠️ No license data")
@@ -413,21 +501,21 @@ def main():
     print(f"✅ Successfully processed: {success_count}/{len(CHANNELS)} channels")
     print("="*60)
     
-    # 4. M3U তৈরি
+    # 5. M3U তৈরি
     m3u_content = generate_m3u(channels_data)
     m3u_path = os.path.join(OUTPUT_DIR, 'cctv.m3u')
     with open(m3u_path, 'w', encoding='utf-8') as f:
         f.write(m3u_content)
     print(f"✅ M3U saved: {m3u_path}")
     
-    # 5. JSON তৈরি
+    # 6. JSON তৈরি
     json_data = generate_json(channels_data, fingerprint)
     json_path = os.path.join(OUTPUT_DIR, 'cctv.json')
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(json_data, f, indent=2, ensure_ascii=False)
     print(f"✅ JSON saved: {json_path}")
     
-    # 6. সারাংশ
+    # 7. সারাংশ
     print("\n📊 SUMMARY")
     print("-"*60)
     print(f"📺 Total channels: {len(CHANNELS)}")
